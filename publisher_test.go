@@ -14,17 +14,11 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-func publisherServer(t *testing.T, dir string) (*server.Server, jetstream.JetStream) {
+func publisherServer(t *testing.T, dir string, configs ...Config) (*server.Server, jetstream.JetStream) {
 	t.Helper()
 	cfg := testConfig()
-	owner, err := PermissionsFor(cfg, "project:alpha")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.NodeID = "replica"
-	replica, err := PermissionsFor(cfg, "project:alpha")
-	if err != nil {
-		t.Fatal(err)
+	if len(configs) > 0 {
+		cfg = configs[0]
 	}
 	options := &server.Options{}
 	if err := options.ProcessConfigString("jetstream { sync_interval: always }"); err != nil {
@@ -36,10 +30,17 @@ func publisherServer(t *testing.T, dir string) (*server.Server, jetstream.JetStr
 	options.Host, options.Port = "127.0.0.1", -1
 	options.JetStream, options.StoreDir = true, dir
 	options.NoLog, options.NoSigs = true, true
-	options.Users = []*server.User{
-		{Username: "owner", Password: "test-owner", Permissions: &server.Permissions{Publish: &server.SubjectPermission{Allow: owner.Publish}, Subscribe: &server.SubjectPermission{Allow: owner.Subscribe}}},
-		{Username: "replica", Password: "test-replica", Permissions: &server.Permissions{Publish: &server.SubjectPermission{Allow: replica.Publish}, Subscribe: &server.SubjectPermission{Allow: replica.Subscribe}}},
-		{Username: "admin", Password: "test-admin"},
+	options.Users = []*server.User{{Username: "admin", Password: "test-admin"}}
+	for _, node := range cfg.Nodes {
+		cfg.NodeID = node
+		permissions, err := PermissionsFor(cfg, "project:alpha")
+		if errors.Is(err, ErrNotAssigned) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		options.Users = append(options.Users, &server.User{Username: node, Password: "test-" + node, Permissions: &server.Permissions{Publish: &server.SubjectPermission{Allow: permissions.Publish}, Subscribe: &server.SubjectPermission{Allow: permissions.Subscribe}}})
 	}
 	s, err := server.NewServer(options)
 	if err != nil {

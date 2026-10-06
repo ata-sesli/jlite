@@ -43,27 +43,35 @@ type OutboxEntry struct {
 	Payload  []byte
 }
 
-func openWriterDB(path, namespace string, cfg Config) (*zova.DB, *os.File, error) {
+func lockDatabase(path string) (string, *os.File, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return nil, nil, err
+		return "", nil, err
 	}
 	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
 		absolute = resolved
 	} else {
 		parent, err := filepath.EvalSymlinks(filepath.Dir(absolute))
 		if err != nil {
-			return nil, nil, err
+			return "", nil, err
 		}
 		absolute = filepath.Join(parent, filepath.Base(absolute))
 	}
 	lock, err := os.OpenFile(absolute+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return nil, nil, err
+		return "", nil, err
 	}
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = lock.Close()
-		return nil, nil, fmt.Errorf("%w: %v", ErrWriterBusy, err)
+		return "", nil, fmt.Errorf("%w: %v", ErrWriterBusy, err)
+	}
+	return absolute, lock, nil
+}
+
+func openWriterDB(path, namespace string, cfg Config) (*zova.DB, *os.File, error) {
+	absolute, lock, err := lockDatabase(path)
+	if err != nil {
+		return nil, nil, err
 	}
 	var db *zova.DB
 	_, statErr := os.Stat(absolute)

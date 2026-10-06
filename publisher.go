@@ -9,8 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -46,7 +44,7 @@ func StreamName(namespace string) (string, error) {
 }
 
 // PermissionsFor permits only the owner to publish changes or provision its
-// stream. Replicas can inspect/read it, but consumer permissions are Item 5.
+// stream. Replicas can operate only their own namespace consumer and acknowledgements.
 func PermissionsFor(c Config, namespace string) (SubjectPermissions, error) {
 	a, err := c.assignment(namespace)
 	if err != nil {
@@ -61,6 +59,12 @@ func PermissionsFor(c Config, namespace string) (SubjectPermissions, error) {
 	p := SubjectPermissions{Publish: []string{"$JS.API.STREAM.INFO." + name, "$JS.API.STREAM.MSG.GET." + name}, Subscribe: []string{prefix + ".>"}, InboxPrefix: prefix}
 	if a.Owner == c.NodeID {
 		p.Publish = append(p.Publish, subject, "$JS.API.STREAM.CREATE."+name)
+	} else {
+		consumer, _ := ConsumerName(namespace, c.NodeID)
+		p.Publish = append(p.Publish, "$JS.API.CONSUMER.INFO."+name+"."+consumer,
+			"$JS.API.CONSUMER.CREATE."+name+"."+consumer, "$JS.API.CONSUMER.DURABLE.CREATE."+name+"."+consumer,
+			"$JS.API.CONSUMER.DELETE."+name+"."+consumer, "$JS.API.CONSUMER.MSG.NEXT."+name+"."+consumer,
+			"$JS.ACK."+name+"."+consumer+".>", "$JS.ACK.*.*."+name+"."+consumer+".>")
 	}
 	return p, nil
 }
@@ -99,14 +103,11 @@ type Publisher struct {
 // ConnectPublisher validates or provisions retained history, then persists its
 // incarnation before any publication. It never updates an existing stream.
 func ConnectPublisher(ctx context.Context, w *Writer, o PublisherOptions) (_ *Publisher, err error) {
-	u, e := url.Parse(o.URL)
-	if w == nil || e != nil || u.Hostname() == "" || u.User != nil || o.Username == "" || o.Password == "" || o.MaxStreamBytes <= 0 || o.Replicas < 1 || o.Replicas > 5 || o.DuplicateWindow < 100*time.Millisecond || o.RequestTimeout <= 0 {
+	if w == nil {
 		return nil, ErrInvalidConfig
 	}
-	ip := net.ParseIP(u.Hostname())
-	loopback := u.Hostname() == "localhost" || ip != nil && ip.IsLoopback()
-	if u.Scheme != "tls" && (u.Scheme != "nats" || (!loopback && o.TLSConfig == nil)) {
-		return nil, fmt.Errorf("%w: TLS required outside loopback", ErrInvalidConfig)
+	if err := validateConnectionOptions(o); err != nil {
+		return nil, err
 	}
 	w.mu.Lock()
 	if e := w.available(); e != nil {
@@ -125,22 +126,7 @@ func ConnectPublisher(ctx context.Context, w *Writer, o PublisherOptions) (_ *Pu
 			p.Close()
 		}
 	}()
-	permissions, e := PermissionsFor(w.cfg, w.namespace)
-	if e != nil {
-		return nil, e
-	}
-	connectOptions := []nats.Option{nats.UserInfo(o.Username, o.Password), nats.CustomInboxPrefix(permissions.InboxPrefix), nats.Timeout(o.RequestTimeout), nats.NoReconnect(), nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {})}
-	if o.TLSConfig != nil {
-		connectOptions = append(connectOptions, nats.Secure(o.TLSConfig.Clone()))
-	}
-	p.nc, err = nats.Connect(o.URL, connectOptions...)
-	if err != nil {
-		return nil, err
-	}
-	if !p.nc.AuthRequired() {
-		return nil, ErrPublisherAuth
-	}
-	p.js, err = jetstream.New(p.nc)
+	p.nc, p.js, err = connectNamespace(w.cfg, w.namespace, o)
 	if err != nil {
 		return nil, err
 	}
@@ -187,17 +173,25 @@ func ConnectPublisher(ctx context.Context, w *Writer, o PublisherOptions) (_ *Pu
 }
 
 func (p *Publisher) streamConfig(state WriterState, id string) jetstream.StreamConfig {
+	return namespaceStreamConfig(state, id, p.w.cfg.Limits, p.options)
+}
+
+func namespaceStreamConfig(state WriterState, id string, limits Limits, o PublisherOptions) jetstream.StreamConfig {
 	name, _ := StreamName(state.Namespace)
 	subject, _ := ChangeSubject(state.Namespace)
 	return jetstream.StreamConfig{Name: name, Subjects: []string{subject}, Storage: jetstream.FileStorage, Retention: jetstream.LimitsPolicy, Discard: jetstream.DiscardNew,
-		MaxBytes: p.options.MaxStreamBytes, MaxMsgs: -1, MaxMsgsPerSubject: -1, MaxMsgSize: int32(p.w.cfg.Limits.MaxChangeBytes + 4096), Replicas: p.options.Replicas,
-		Duplicates: p.options.DuplicateWindow, DenyDelete: true, DenyPurge: true,
+		MaxBytes: o.MaxStreamBytes, MaxMsgs: -1, MaxMsgsPerSubject: -1, MaxMsgSize: int32(limits.MaxChangeBytes + 4096), Replicas: o.Replicas,
+		Duplicates: o.DuplicateWindow, DenyDelete: true, DenyPurge: true,
 		Metadata: map[string]string{"jlite_database_id": state.DatabaseID, "jlite_namespace": state.Namespace, "jlite_owner": state.Owner, "jlite_protocol": strconv.Itoa(ProtocolVersion), "jlite_stream_id": id}}
 }
 
 func (p *Publisher) checkStream(info *jetstream.StreamInfo, state WriterState, b streamBinding, bound bool) error {
+	return checkNamespaceStream(info, state, b, bound, p.w.cfg.Limits, p.options)
+}
+
+func checkNamespaceStream(info *jetstream.StreamInfo, state WriterState, b streamBinding, bound bool, limits Limits, o PublisherOptions) error {
 	c := info.Config
-	expected := p.streamConfig(state, c.Metadata["jlite_stream_id"])
+	expected := namespaceStreamConfig(state, c.Metadata["jlite_stream_id"], limits, o)
 	if c.Name != expected.Name || len(c.Subjects) != 1 || c.Subjects[0] != expected.Subjects[0] || c.Storage != expected.Storage || c.Retention != expected.Retention || c.Discard != expected.Discard ||
 		c.MaxBytes != expected.MaxBytes || c.Replicas != expected.Replicas || c.MaxMsgSize != expected.MaxMsgSize || c.MaxAge != 0 || c.MaxMsgs != -1 || c.MaxMsgsPerSubject != -1 || c.Duplicates != expected.Duplicates ||
 		c.NoAck || c.Sealed || !c.DenyDelete || !c.DenyPurge || c.AllowRollup || c.AllowMsgTTL || c.DiscardNewPerSubject || c.Mirror != nil || len(c.Sources) > 0 || c.SubjectTransform != nil || c.RePublish != nil || c.Template != "" || c.AllowMsgCounter || c.AllowMsgSchedules || c.AllowAtomicPublish || c.AllowBatchPublish || c.SubjectDeleteMarkerTTL != 0 {

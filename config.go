@@ -13,7 +13,7 @@ var (
 	ErrNotAssigned      = errors.New("local node is not assigned to the namespace")
 )
 
-// Limits bounds record sizes, wire messages, and future writer batches.
+// Limits bounds record sizes, wire messages, and writer batches.
 // BatchWait bounds collection time, not end-to-end latency.
 type Limits struct {
 	MaxKeyBytes        int

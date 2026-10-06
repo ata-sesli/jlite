@@ -1,3 +1,4 @@
-// Package jlite is the foundation for a local-first distributed storage control
-// layer over Zova and NATS JetStream. Replication is not implemented yet.
+// Package jlite defines static assignments, local record request contracts,
+// and a versioned change protocol for Zova and NATS JetStream.
+// Durable write application and replication are not implemented yet.
 package jlite

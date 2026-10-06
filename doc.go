@@ -1,4 +1,5 @@
-// Package jlite defines static assignments, local record request contracts,
-// and a versioned change protocol for Zova and NATS JetStream.
-// Durable write application and replication are not implemented yet.
+// Package jlite provides static assignments, a versioned change protocol,
+// and a bounded transactional Zova writer with a durable outbox.
+// Authenticated ordered JetStream publication is supported; replica application
+// is not implemented yet.
 package jlite

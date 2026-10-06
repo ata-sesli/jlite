@@ -69,7 +69,7 @@ type WriteResult struct {
 }
 
 // StoredWrite is the durable retry metadata committed with a write's data.
-// Storage and atomic persistence are implemented by the later writer task.
+// Writer persists this metadata atomically with the record and outbox entry.
 type StoredWrite struct {
 	RequestID   string
 	Fingerprint string

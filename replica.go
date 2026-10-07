@@ -341,80 +341,7 @@ func (r *Replica) applyMessages(messages []jetstream.Msg, consumer string) (appl
 		return 0, err
 	}
 	if err = r.db.BeginImmediate(); err == nil {
-		var state ReplicaState
-		state, err = r.readState()
-		bytes := 0
-		if len(messages) > r.cfg.Limits.MaxBatchOperations {
-			err = ErrInvalidChange
-		}
-		for _, m := range messages {
-			if err != nil {
-				break
-			}
-			bytes += len(m.Data())
-			if bytes > r.cfg.Limits.MaxBatchBytes {
-				err = ErrInvalidChange
-				break
-			}
-			var change Change
-			change, err = DecodeChange(m.Data(), r.cfg)
-			if err != nil {
-				break
-			}
-			if change.Request.Namespace != r.namespace {
-				err = ErrInvalidChange
-				break
-			}
-			var meta *jetstream.MsgMetadata
-			meta, err = m.Metadata()
-			if err != nil {
-				break
-			}
-			name, _ := StreamName(r.namespace)
-			subject, _ := ChangeSubject(r.namespace)
-			if meta.Stream != name || meta.Consumer != consumer || m.Subject() != subject || m.Headers().Get(jetstream.MsgIDHeader) != change.ID || meta.Sequence.Stream == 0 || meta.Sequence.Stream > maxSequence {
-				err = ErrStreamIdentity
-				break
-			}
-			if meta.Sequence.Stream > state.LogSequence+1 || change.Sequence > state.AppliedSequence+1 {
-				err = ErrSequenceGap
-				break
-			}
-			if change.Sequence <= state.AppliedSequence {
-				var id string
-				var found bool
-				id, found, err = r.appliedID(change.Sequence)
-				if err == nil && (!found || id != change.ID) {
-					err = ErrInvalidChange
-				}
-			} else if meta.Sequence.Stream <= state.LogSequence {
-				err = ErrInvalidChange
-			} else {
-				if change.Request.Operation == Put {
-					err = executeSQL(r.db, "INSERT INTO jlite_records VALUES(?,coalesce(?,x'')) ON CONFLICT(key) DO UPDATE SET value=excluded.value", change.Request.Key, change.Request.Value)
-				} else {
-					err = executeSQL(r.db, "DELETE FROM jlite_records WHERE key=?", change.Request.Key)
-				}
-				if err == nil {
-					err = executeSQL(r.db, "INSERT INTO jlite_applied VALUES(?,?,?)", int64(change.Sequence), change.ID, change.Request.RequestID)
-				}
-				if err == nil {
-					state.AppliedSequence++
-					applied++
-				}
-			}
-			if err == nil && meta.Sequence.Stream > state.LogSequence {
-				state.LogSequence = meta.Sequence.Stream
-				state.LastChangeID = change.ID
-			}
-		}
-		if err == nil {
-			ready := int64(0)
-			if state.LogSequence >= state.BootstrapLogTarget && state.AppliedSequence >= state.BootstrapTarget {
-				ready = 1
-			}
-			err = executeSQL(r.db, "UPDATE jlite_replica SET applied=?,log_sequence=?,last_change_id=?,ready=? WHERE singleton=1", int64(state.AppliedSequence), int64(state.LogSequence), state.LastChangeID, ready)
-		}
+		applied, err = r.mutateMessages(messages, consumer)
 	}
 	if err == nil {
 		err = r.db.Commit()
@@ -425,4 +352,84 @@ func (r *Replica) applyMessages(messages []jetstream.Msg, consumer string) (appl
 		return 0, err
 	}
 	return applied, nil
+}
+
+// mutateMessages validates and applies a batch and its checkpoint inside the
+// caller's open transaction. The caller holds mu and owns commit/rollback.
+func (r *Replica) mutateMessages(messages []jetstream.Msg, consumer string) (applied int, err error) {
+	var state ReplicaState
+	state, err = r.readState()
+	bytes := 0
+	if len(messages) > r.cfg.Limits.MaxBatchOperations {
+		err = ErrInvalidChange
+	}
+	for _, m := range messages {
+		if err != nil {
+			break
+		}
+		bytes += len(m.Data())
+		if bytes > r.cfg.Limits.MaxBatchBytes {
+			err = ErrInvalidChange
+			break
+		}
+		var change Change
+		change, err = DecodeChange(m.Data(), r.cfg)
+		if err != nil {
+			break
+		}
+		if change.Request.Namespace != r.namespace {
+			err = ErrInvalidChange
+			break
+		}
+		var meta *jetstream.MsgMetadata
+		meta, err = m.Metadata()
+		if err != nil {
+			break
+		}
+		name, _ := StreamName(r.namespace)
+		subject, _ := ChangeSubject(r.namespace)
+		if meta.Stream != name || meta.Consumer != consumer || m.Subject() != subject || m.Headers().Get(jetstream.MsgIDHeader) != change.ID || meta.Sequence.Stream == 0 || meta.Sequence.Stream > maxSequence {
+			err = ErrStreamIdentity
+			break
+		}
+		if meta.Sequence.Stream > state.LogSequence+1 || change.Sequence > state.AppliedSequence+1 {
+			err = ErrSequenceGap
+			break
+		}
+		if change.Sequence <= state.AppliedSequence {
+			var id string
+			var found bool
+			id, found, err = r.appliedID(change.Sequence)
+			if err == nil && (!found || id != change.ID) {
+				err = ErrInvalidChange
+			}
+		} else if meta.Sequence.Stream <= state.LogSequence {
+			err = ErrInvalidChange
+		} else {
+			if change.Request.Operation == Put {
+				err = executeSQL(r.db, "INSERT INTO jlite_records VALUES(?,coalesce(?,x'')) ON CONFLICT(key) DO UPDATE SET value=excluded.value", change.Request.Key, change.Request.Value)
+			} else {
+				err = executeSQL(r.db, "DELETE FROM jlite_records WHERE key=?", change.Request.Key)
+			}
+			if err == nil {
+				err = executeSQL(r.db, "INSERT INTO jlite_applied VALUES(?,?,?)", int64(change.Sequence), change.ID, change.Request.RequestID)
+			}
+			if err == nil {
+				state.AppliedSequence++
+				applied++
+			}
+		}
+		if err == nil && meta.Sequence.Stream > state.LogSequence {
+			state.LogSequence = meta.Sequence.Stream
+			state.LastChangeID = change.ID
+		}
+	}
+	if err == nil {
+		ready := int64(0)
+		if state.LogSequence >= state.BootstrapLogTarget && state.AppliedSequence >= state.BootstrapTarget {
+			ready = 1
+		}
+		err = executeSQL(r.db, "UPDATE jlite_replica SET applied=?,log_sequence=?,last_change_id=?,ready=? WHERE singleton=1", int64(state.AppliedSequence), int64(state.LogSequence), state.LastChangeID, ready)
+	}
+	return applied, err
 }

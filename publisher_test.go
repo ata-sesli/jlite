@@ -15,6 +15,10 @@ import (
 )
 
 func publisherServer(t *testing.T, dir string, configs ...Config) (*server.Server, jetstream.JetStream) {
+	return publisherServerOnPort(t, dir, -1, configs...)
+}
+
+func publisherServerOnPort(t *testing.T, dir string, port int, configs ...Config) (*server.Server, jetstream.JetStream) {
 	t.Helper()
 	cfg := testConfig()
 	if len(configs) > 0 {
@@ -27,7 +31,7 @@ func publisherServer(t *testing.T, dir string, configs ...Config) (*server.Serve
 	if !options.SyncAlways {
 		t.Fatal("test server must fsync publications")
 	}
-	options.Host, options.Port = "127.0.0.1", -1
+	options.Host, options.Port = "127.0.0.1", port
 	options.JetStream, options.StoreDir = true, dir
 	options.NoLog, options.NoSigs = true, true
 	options.Users = []*server.User{{Username: "admin", Password: "test-admin"}}

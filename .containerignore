@@ -1,0 +1,11 @@
+.git
+.local
+.agents
+.codex
+.aws
+.env*
+.codebase-memory
+notes
+*.zova
+*.zova-*
+*.lock

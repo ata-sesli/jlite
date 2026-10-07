@@ -1,0 +1,30 @@
+FROM docker.io/library/golang:1.27.1-bookworm AS build
+ENV GOTOOLCHAIN=local
+RUN apt-get update && apt-get install -y --no-install-recommends xz-utils && rm -rf /var/lib/apt/lists/*
+# Zova's 1.1.0 x86_64 archive leaves __zig_probe_stack for the final linker.
+# Compile the matching official compiler runtime rather than replacing the probe.
+RUN curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz \
+    && echo '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz' | sha256sum -c - \
+    && mkdir /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+RUN /opt/zig/zig build-lib /opt/zig/lib/compiler_rt.zig -O ReleaseFast -target x86_64-linux-gnu -fno-compiler-rt -femit-bin=/opt/zig/libcompiler_rt.a \
+    && test "$(ar t /opt/zig/libcompiler_rt.a | wc -l)" -eq 1 \
+    && ar p /opt/zig/libcompiler_rt.a > /opt/zig/compiler_rt.o \
+    && objcopy --keep-global-symbol=__zig_probe_stack /opt/zig/compiler_rt.o \
+    && ar rcs /opt/zig/libstack_probe.a /opt/zig/compiler_rt.o \
+    && test "$(nm -g --defined-only /opt/zig/libstack_probe.a | awk '$2 ~ /^[TW]$/ { print $3 }')" = __zig_probe_stack
+ENV CGO_LDFLAGS=/opt/zig/libstack_probe.a
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN test "$(go env GOVERSION)" = go1.27.1 && go mod download
+COPY . .
+RUN sh scripts/setup-zova.sh
+RUN sh scripts/go.sh test -race -count=1 -v -timeout=90s ./... && sh scripts/go.sh vet ./...
+RUN sh scripts/go.sh build -o /out/jlite ./cmd/jlite
+
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data /run/jlite && chown -R 10001:10001 /data /run/jlite
+COPY --from=build /out/jlite /usr/local/bin/jlite
+USER 10001:10001
+ENTRYPOINT ["jlite"]

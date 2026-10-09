@@ -1,0 +1,26 @@
+{
+  "host": {
+    "arch": "amd64",
+    "cpus": 8,
+    "memory_bytes": 12410437632,
+    "kernel": "7.1.10-200.fc44.x86_64",
+    "distribution": {
+      "distribution": "fedora",
+      "variant": "xfce",
+      "version": "44"
+    }
+  },
+  "storage": {
+    "driver": "overlay",
+    "backing": {
+      "Backing Filesystem": "btrfs",
+      "Native Overlay Diff": "true",
+      "Supports d_type": "true",
+      "Supports shifting": "false",
+      "Supports volatile": "true",
+      "Using metacopy": "false"
+    }
+  },
+  "engine_version": "5.8.4",
+  "client_version": "6.1.0"
+}

@@ -6,6 +6,7 @@
 .env*
 .codebase-memory
 notes
+benchmarks/results
 *.zova
 *.zova-*
 *.lock

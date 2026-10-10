@@ -330,6 +330,19 @@ include capacities, observed batch sizes, latency percentiles and storage/memory
 measurements. These are synthetic workload measurements, not a throughput or
 latency guarantee for an application.
 
+To measure continuous ingestion with publication and both replicas online:
+
+```sh
+sh scripts/podman-continuous-benchmark.sh
+```
+
+This runner repeats eight-second offers at 20, 80 and 200 writes/second using
+1 KiB values, records progress during ingestion and subsequent backlog drain,
+and captures publisher broker-call timings and profiles. It uses the same
+durability settings and verifies every committed record on both replicas.
+[Continuous replication results](benchmarks/continuous.md) describe the workload,
+publisher change and measured limits.
+
 ## Project boundaries
 
 jlite stays centered on Zova + JetStream and namespace-level coordination.

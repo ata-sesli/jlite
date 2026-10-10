@@ -23,6 +23,13 @@ func TestBenchmarkProcMemory(t *testing.T) {
 	}
 }
 
+func TestContinuousBenchmarkConvergesWhileWriting(t *testing.T) {
+	r := runContinuousBenchmark(t, continuousSpec{Rate: 80, Operations: 32, PayloadBytes: 1024})
+	if r.Committed != 32 || r.Published != 32 || r.Replicated[0] != 32 || r.Replicated[1] != 32 || r.PublishedDuringIngestion == 0 || r.ReplicatedDuringIngestion[0] == 0 || r.ReplicatedDuringIngestion[1] == 0 || r.LocalLatency.P95MS <= 0 || len(r.Progress) == 0 {
+		t.Fatalf("incomplete continuous measurements: %+v", r)
+	}
+}
+
 func TestBenchmarkHarnessChecksDurabilityAndConvergence(t *testing.T) {
 	for _, mode := range []string{"single", "batch"} {
 		t.Run(mode, func(t *testing.T) {

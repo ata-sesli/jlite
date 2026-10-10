@@ -224,6 +224,11 @@ func (p *Publisher) validateHistory(ctx context.Context, info *jetstream.StreamI
 		if err != nil || c.Sequence != state.PublishedSequence || c.ID != b.ChangeID {
 			return nil, ErrStreamIdentity
 		}
+		// The verified checkpoint is also the tail in the normal case. Reuse
+		// this response within this inspection; never cache it across calls.
+		if info.State.LastSeq == b.LogSequence {
+			return anchor, nil
+		}
 	}
 	if info.State.LastSeq == 0 {
 		if state.PublishedSequence != 0 {

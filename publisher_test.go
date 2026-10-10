@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,6 +17,42 @@ import (
 
 func publisherServer(t *testing.T, dir string, configs ...Config) (*server.Server, jetstream.JetStream) {
 	return publisherServerOnPort(t, dir, -1, configs...)
+}
+
+func TestPublisherAvoidsDuplicateHistoryReads(t *testing.T) {
+	s, _ := publisherServer(t, t.TempDir())
+	w := openTestWriter(t, filepath.Join(t.TempDir(), "owner.zova"), testConfig(), DefaultWriterOptions())
+	p := openTestPublisher(t, w, testPublisherOptions(s))
+	for i := range 2 {
+		r := testWrite()
+		r.RequestID = fmt.Sprintf("history-%d", i)
+		if _, err := w.Write(context.Background(), r); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if ok, err := p.PublishNext(context.Background()); !ok || err != nil {
+				t.Fatalf("seed: %v %v", ok, err)
+			}
+		}
+	}
+	stream := &timedStream{Stream: p.stream}
+	p.stream = stream
+	if ok, err := p.PublishNext(context.Background()); !ok || err != nil {
+		t.Fatalf("publish: %v %v", ok, err)
+	}
+	if stream.GetTiming.Calls != 2 {
+		t.Fatalf("history and accepted message require two reads, got %d", stream.GetTiming.Calls)
+	}
+	if ok, err := p.PublishNext(context.Background()); ok || err != nil {
+		t.Fatalf("idle verification: %v %v", ok, err)
+	}
+	if stream.GetTiming.Calls != 3 {
+		t.Fatalf("idle history requires one additional read, got %d total", stream.GetTiming.Calls)
+	}
+	st, err := w.State()
+	if err != nil || st.PublishedSequence != 2 || st.OutboxCount != 0 {
+		t.Fatalf("incomplete checkpoint: %+v %v", st, err)
+	}
 }
 
 func publisherServerOnPort(t *testing.T, dir string, port int, configs ...Config) (*server.Server, jetstream.JetStream) {

@@ -121,17 +121,8 @@ respectively. That historical comparison agrees with the controlled reference,
 but it was a separate run; the fresh paired single/batch samples are stronger
 evidence for this change.
 
-Evidence:
-
-- [All 18 raw samples](results/publication-batches.json)
-- [Remote environment and image identity](results/publication-batches-environment.json)
-- [Measured source checksums](results/publication-batches-source.sha256)
-- [Single-publication CPU profile](results/publication-batches.json.single.cpu)
-- [Batched-publication CPU profile](results/publication-batches.json.batch.cpu)
-- [Initial failed implementation's partial matrix](results/publication-batches-initial.json.partial)
-
 The measured source was `012bb0a5ebe86b61a4ac97567273cc0a8114c43f` plus the
-uncommitted batching changes identified by the checksum file. The runner built
+then-uncommitted batching changes. The runner built
 image `0d0f6f8a4100318317242cbd559677ab5a74d42c1fd8ed08511e77db8ed5f0f3`.
 Full race tests and vet passed in that image before measurement
 (`jlite` race suite 34.934 seconds). Timing was sequential, with no competing test

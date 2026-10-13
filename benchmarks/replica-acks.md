@@ -3,7 +3,7 @@
 **Status: not adopted.** Replica ACKs were returned to serial confirmation on
 2026-10-13, together with the continuous publisher this change was measured on.
 This report is kept as the record of the experiment; "now" below describes the
-experimental code, saved as [a patch](results/replica-acks-production.patch).
+experimental code. Raw samples and patches are not kept in the repository.
 
 Paired sustained runs show lower replica lag and memory peaks, with effectively
 unchanged end-to-end capacity. The 200 writes/s target remains unmet; short 200/s
@@ -88,13 +88,6 @@ Process RSS includes broker, three databases and benchmark bookkeeping; it is
 not a per-node memory limit. Two samples provide a comparison, not a production
 capacity guarantee or confidence interval.
 
-Evidence: [raw paired results](results/replica-acks.json),
-[environment and binary hashes](results/replica-acks-environment.json),
-[serial source hashes](results/replica-acks-serial-source.sha256),
-[concurrent source hashes](results/replica-acks-concurrent-source.sha256),
-[production patch](results/replica-acks-production.patch), and
-[comparison patch](results/replica-acks-benchmark.patch).
-
 ## Short-offer results
 
 The table reports medians of two samples per variant. Replica P95 uses the slower replica in each case.
@@ -149,14 +142,9 @@ compile error was corrected before any measurement.
 
 ## Reproduction
 
-Use the configured Podman remote directly. Build the current test stage with
-Go 1.27.1; compile the concurrent test binary with `sh scripts/go.sh test -c`.
-Inside an isolated container/source copy, reverse
-`results/replica-acks-benchmark.patch` to restore the serial loop and compile
-the serial binary with the identical harness. Reapply the patch before ordinary
-correctness checks: the concurrency regression deliberately fails on the serial
-receiver. `results/replica-acks-production.patch` records the entire production
-change, including the helper, and is separate from the comparison patch.
+The comparison used the configured Podman remote directly. Both test binaries
+were built with Go 1.27.1 and `sh scripts/go.sh test -c` from the identical
+harness; they differed only in the serial or concurrent ACK loop.
 
 Follow the existing benchmark's four-CPU, 2 GiB, GOMAXPROCS=4 container setup
 with `--network=none`, a dedicated named volume mounted at `/bench-data`, and

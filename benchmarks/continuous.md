@@ -121,13 +121,6 @@ the harness was strengthened; successful workload and metric collection stayed
 the same. The environment was Fedora 44/Linux amd64 on a shared physical host,
 with a dedicated btrfs-backed volume and identical container limits.
 
-- [Before raw results](results/continuous-before.json)
-- [After raw results](results/continuous-after.json)
-- [Environment and excluded attempt](results/continuous-environment.json)
-- [Measured source checksums](results/continuous-source.sha256)
-- [Baseline CPU profile](results/continuous-before.json.cpu)
-- [After CPU profile](results/continuous-after.json.cpu)
-
 The round-one 200/s case captures a CPU profile in each revision. Go CPU profiles
 attribute native work largely to cgo and do not directly measure disk wait.
 The captured blocking profile had no usable samples; it provides no evidence

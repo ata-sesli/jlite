@@ -2,8 +2,8 @@
 
 **Status: not adopted.** The publisher was returned to window barriers on
 2026-10-13. This report is kept as the record of the experiment; "now" and
-"current" below describe the experimental code, saved as
-[a patch](results/continuous-pipeline.patch).
+"current" below describe the experimental code. Raw samples, profiles and
+patches are not kept in the repository.
 
 Continuous refill preserved correctness but did not sustain 200 replicated
 writes/s in the tested setup. Short-offer throughput improved 115 → 129 writes/s;
@@ -92,11 +92,8 @@ JLITE_BENCH_SECONDS=120 JLITE_BENCH_RATES=200 JLITE_BENCH_MODES=batch \
 ```
 
 The paired baseline was compiled before modifying `publisher_batch.go`, with the
-same updated case driver. [The production patch](results/continuous-pipeline.patch)
-records the exact publisher difference; reversing it in an isolated source copy
-reconstructs that baseline. The raw report records the baseline publisher and test
-binary hashes. [Measured source checksums](results/continuous-pipeline-source.sha256)
-identify the final source and harness. No timing jobs overlapped build or test jobs.
+same updated case driver. The two binaries differed only in the publisher loop.
+No timing jobs overlapped build or test jobs.
 
 ## Verification
 
@@ -179,15 +176,6 @@ used the same updated arrival scheduler and ACK instrumentation. The historical
 run used timer ticks that could be dropped under scheduling delay. Neither short
 benchmark established steady-state capacity.
 
-Evidence:
-
-- [All 22 final samples](results/continuous-pipeline.json)
-- [Remote environment, resource limits and binary identities](results/continuous-pipeline-environment.json)
-- [Window-barrier CPU profile](results/continuous-pipeline.json.windowed.cpu)
-- [Continuous-pipeline CPU profile](results/continuous-pipeline.json.pipeline.cpu)
-- [Window-barrier blocking profile](results/continuous-pipeline.json.windowed.block)
-- [Continuous-pipeline blocking profile](results/continuous-pipeline.json.pipeline.block)
-
 The first sustained pipeline child printed `PASS` and saved its completed result,
 but Podman returned exit 125 because its exec-session record was unavailable.
 The result was recovered, matched against the recorded 110-second progress and
@@ -203,8 +191,5 @@ and end-to-end throughput fell from 151.79 to 134.51 writes/s despite lower ACK
 latency. The reads overlapped broker writes; the final implementation separates
 those phases while retaining all validation before checkpointing.
 
-The [12 completed initial samples](results/continuous-pipeline-initial.json),
-[initial source manifest](results/continuous-pipeline-initial-source.sha256), and
-[initial production patch](results/continuous-pipeline-initial.patch) are retained
-separately. That experiment stopped before its sustained cases and is excluded
-from the final comparison.
+That experiment completed 12 samples, stopped before its sustained cases and is
+excluded from the final comparison.

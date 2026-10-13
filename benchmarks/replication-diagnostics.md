@@ -189,13 +189,6 @@ test or profile-analysis jobs overlap the unprofiled control/component timings.
 The physical host remains shared with unrelated work. One brief pprof analysis
 overlapped the profiled windowed run; its timings are not used for capacity claims.
 
-Evidence: [raw replica cases](results/replication-diagnostics.json),
-[component cases](results/replication-components.json),
-[environment and binary hashes](results/replication-diagnostics-environment.json),
-[replica source checksums](results/replication-diagnostics-source.sha256),
-[component source checksums](results/replication-components-source.sha256), and
-[profiles](results/replication-diagnostics-profiles/).
-
 The original full race suite passed after adding replica observers (jlite 112.825s,
 command package 1.867s), and vet passed. The subsequently added component helpers
 passed focused race checks (5.991s). The replica diagnostic unit test observes
@@ -244,7 +237,4 @@ podman exec -e JLITE_STORAGE_DIAGNOSTIC_OUTPUT=/bench-data/storage.json \
 
 Copy JSON/profile artifacts with `podman cp` before removing this container and
 volume. Inspect heap and allocation attribution with `go tool pprof -top`;
-use `-sample_index=alloc_space` for allocation profiles. Reconstruct the old
-publisher in an isolated source copy using the previously saved
-[production patch](results/continuous-pipeline.patch), with the same observer
-harness, when comparing stages against the window-barrier implementation.
+use `-sample_index=alloc_space` for allocation profiles.

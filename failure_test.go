@@ -103,7 +103,30 @@ func TestFailureProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if args.Mode == "owner-commit" || args.Mode == "owner-published" {
+	if args.Mode == "owner-batch-published" || args.Mode == "owner-batch-checkpointed" {
+		w := openTestWriter(t, args.Path, replicaConfig("owner"), DefaultWriterOptions())
+		for i, request := range failureRequests()[:3] {
+			if result, err := w.Write(ctx, request); err != nil || result.Sequence != uint64(i+1) {
+				t.Fatalf("child batch write: %+v %v", result, err)
+			}
+		}
+		o := DefaultPublisherOptions()
+		o.URL, o.Username, o.Password, o.DuplicateWindow = args.URL, "owner", "test-owner", 100*time.Millisecond
+		p := openTestPublisher(t, w, o)
+		if args.Mode == "owner-batch-published" {
+			w.mu.Lock()
+			err := w.db.Exec("CREATE TRIGGER fail_checkpoint BEFORE UPDATE OF published ON jlite_state BEGIN SELECT RAISE(ABORT,'checkpoint failure'); END")
+			w.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, err := p.PublishBatch(ctx); n != 0 || !errors.Is(err, ErrWriterFailed) {
+				t.Fatalf("batch checkpoint barrier: %d %v", n, err)
+			}
+		} else if n, err := p.PublishBatch(ctx); n != 3 || err != nil {
+			t.Fatalf("batch committed barrier: %d %v", n, err)
+		}
+	} else if args.Mode == "owner-commit" || args.Mode == "owner-published" {
 		w := openTestWriter(t, args.Path, replicaConfig("owner"), DefaultWriterOptions())
 		if result, err := w.Write(ctx, failureRequests()[0]); err != nil || result.Sequence != 1 {
 			t.Fatalf("child commit: %+v %v", result, err)

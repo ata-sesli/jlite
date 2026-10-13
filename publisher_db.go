@@ -107,6 +107,10 @@ func (w *Writer) bindStream(b streamBinding) (err error) {
 }
 
 func (w *Writer) acknowledgePublication(ctx context.Context, entry OutboxEntry, logSequence uint64, b streamBinding) (err error) {
+	return w.acknowledgePublications(ctx, []publication{{entry, logSequence}}, b)
+}
+
+func (w *Writer) acknowledgePublications(ctx context.Context, entries []publication, b streamBinding) (err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.available(); err != nil {
@@ -114,6 +118,9 @@ func (w *Writer) acknowledgePublication(ctx context.Context, entry OutboxEntry, 
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if len(entries) == 0 || len(entries) > w.cfg.Limits.MaxBatchOperations {
+		return ErrStreamIdentity
 	}
 	if err = w.db.BeginImmediate(); err == nil {
 		var state WriterState
@@ -123,20 +130,34 @@ func (w *Writer) acknowledgePublication(ctx context.Context, entry OutboxEntry, 
 		if err == nil {
 			current, found, err = readBinding(w.db)
 		}
-		if err == nil && (!found || current.Name != b.Name || current.ID != b.ID || current.Created != b.Created || entry.Sequence != state.PublishedSequence+1 || logSequence <= current.LogSequence || logSequence > maxSequence || int64(len(entry.Payload)) > state.OutboxBytes) {
+		if err == nil && (!found || current.Name != b.Name || current.ID != b.ID || current.Created != b.Created || current.LogSequence != b.LogSequence || current.ChangeID != b.ChangeID) {
 			err = ErrStreamIdentity
 		}
-		if err == nil {
-			err = checkOutboxEntry(w.db, entry)
+		bytes := 0
+		for _, item := range entries {
+			if err != nil {
+				break
+			}
+			entry := item.Entry
+			if entry.Sequence != state.PublishedSequence+1 || item.LogSequence <= current.LogSequence || item.LogSequence > maxSequence || len(entry.Payload) > w.cfg.Limits.MaxBatchBytes-bytes || int64(len(entry.Payload)) > state.OutboxBytes {
+				err = ErrStreamIdentity
+				break
+			}
+			if err = ctx.Err(); err == nil {
+				err = checkOutboxEntry(w.db, entry)
+			}
+			if err == nil {
+				err = executeSQL(w.db, "DELETE FROM jlite_outbox WHERE sequence=? AND id=?", int64(entry.Sequence), entry.ID)
+			}
+			bytes += len(entry.Payload)
+			state.PublishedSequence, state.OutboxBytes = entry.Sequence, state.OutboxBytes-int64(len(entry.Payload))
+			current.LogSequence, current.ChangeID = item.LogSequence, entry.ID
 		}
 		if err == nil {
-			err = executeSQL(w.db, "DELETE FROM jlite_outbox WHERE sequence=? AND id=?", int64(entry.Sequence), entry.ID)
+			err = executeSQL(w.db, "UPDATE jlite_state SET published=?,outbox_bytes=? WHERE singleton=1", int64(state.PublishedSequence), state.OutboxBytes)
 		}
 		if err == nil {
-			err = executeSQL(w.db, "UPDATE jlite_state SET published=?,outbox_bytes=? WHERE singleton=1", int64(entry.Sequence), state.OutboxBytes-int64(len(entry.Payload)))
-		}
-		if err == nil {
-			err = executeSQL(w.db, "UPDATE jlite_stream SET log_sequence=?,change_id=? WHERE singleton=1", int64(logSequence), entry.ID)
+			err = executeSQL(w.db, "UPDATE jlite_stream SET log_sequence=?,change_id=? WHERE singleton=1", int64(current.LogSequence), current.ChangeID)
 		}
 		if err == nil {
 			err = ctx.Err()
@@ -154,6 +175,76 @@ func (w *Writer) acknowledgePublication(ctx context.Context, entry OutboxEntry, 
 		return errors.Join(ErrWriterFailed, w.failed)
 	}
 	return nil
+}
+
+func readOutboxRow(s *zova.Stmt) (entry OutboxEntry, err error) {
+	seq, err := s.ColumnInt64(0)
+	if err != nil {
+		return entry, err
+	}
+	if seq <= 0 {
+		return entry, ErrStreamIdentity
+	}
+	entry.Sequence = uint64(seq)
+	entry.ID, _, err = s.ColumnText(1)
+	if err == nil {
+		entry.Payload, _, err = s.ColumnBlob(2)
+	}
+	return entry, err
+}
+
+func (w *Writer) outboxEntry(sequence uint64) (entry OutboxEntry, found bool, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.available(); err != nil {
+		return entry, false, err
+	}
+	s, err := prepareSQL(w.db, "SELECT sequence,id,payload FROM jlite_outbox WHERE sequence=?", int64(sequence))
+	if err != nil {
+		return entry, false, err
+	}
+	defer func() { err = errors.Join(err, s.Close()) }()
+	step, err := s.Step()
+	if err != nil || step == zova.StepDone {
+		return entry, false, err
+	}
+	entry, err = readOutboxRow(s)
+	return entry, err == nil, err
+}
+
+func (w *Writer) outboxBatch() (entries []OutboxEntry, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.available(); err != nil {
+		return nil, err
+	}
+	s, err := prepareSQL(w.db, "SELECT sequence,id,payload FROM jlite_outbox ORDER BY sequence LIMIT ?", int64(w.cfg.Limits.MaxBatchOperations))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, s.Close()) }()
+	bytes := 0
+	for {
+		step, err := s.Step()
+		if err != nil {
+			return nil, err
+		}
+		if step == zova.StepDone {
+			return entries, nil
+		}
+		entry, err := readOutboxRow(s)
+		if err != nil {
+			return nil, err
+		}
+		if len(entry.Payload) > w.cfg.Limits.MaxBatchBytes-bytes {
+			if len(entries) == 0 {
+				return nil, ErrStreamIdentity
+			}
+			return entries, nil
+		}
+		entries = append(entries, entry)
+		bytes += len(entry.Payload)
+	}
 }
 
 func checkOutboxEntry(db *zova.DB, entry OutboxEntry) (err error) {

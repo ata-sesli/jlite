@@ -3,6 +3,7 @@ package jlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -262,11 +263,11 @@ func (c *ReplicaConsumer) ConsumeNext(ctx context.Context) (int, error) {
 		if errors.Is(err, jetstream.ErrStreamNotFound) {
 			return 0, c.block(errors.Join(ErrStreamIdentity, err))
 		}
-		return 0, err
+		return 0, fmt.Errorf("replica stream info: %w", err)
 	}
 	if err := c.checkStream(rpc, info, s); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrTimeout) {
-			return 0, err
+			return 0, fmt.Errorf("replica history check: %w", err)
 		}
 		return 0, c.block(err)
 	}
@@ -304,7 +305,7 @@ fetched:
 	defer ackcancel()
 	for _, message := range messages {
 		if err := message.DoubleAck(ackctx); err != nil {
-			return applied, errors.Join(err, c.nc.LastError())
+			return applied, fmt.Errorf("replica delivery acknowledgement: %w", errors.Join(err, c.nc.LastError()))
 		}
 	}
 	return applied, nil

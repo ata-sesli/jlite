@@ -393,7 +393,7 @@ func (r *Replica) mutateMessages(messages []jetstream.Msg, consumer string) (app
 			break
 		}
 		if meta.Sequence.Stream > state.LogSequence+1 || change.Sequence > state.AppliedSequence+1 {
-			err = ErrSequenceGap
+			err = fmt.Errorf("%w: stream sequence %d after %d, logical sequence %d after %d", ErrSequenceGap, meta.Sequence.Stream, state.LogSequence, change.Sequence, state.AppliedSequence)
 			break
 		}
 		if change.Sequence <= state.AppliedSequence {

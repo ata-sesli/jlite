@@ -88,8 +88,8 @@ func DefaultPublisherOptions() PublisherOptions {
 	return PublisherOptions{MaxStreamBytes: 64 << 20, Replicas: 1, DuplicateWindow: 2 * time.Minute, RequestTimeout: 2 * time.Second}
 }
 
-// Publisher serially publishes one namespace's durable outbox. The caller drives
-// PublishNext and owns retry scheduling; there is no hidden ingestion loop.
+// Publisher publishes one namespace's durable outbox in ordered, bounded groups.
+// The caller drives PublishNext or PublishBatch and owns retry scheduling.
 type Publisher struct {
 	mu      sync.Mutex
 	w       *Writer
@@ -130,6 +130,7 @@ func ConnectPublisher(ctx context.Context, w *Writer, o PublisherOptions) (_ *Pu
 	if err != nil {
 		return nil, err
 	}
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, o.RequestTimeout)
 	defer cancel()
 	state, b, bound, err := w.publisherSnapshot()
@@ -164,7 +165,7 @@ func ConnectPublisher(ctx context.Context, w *Writer, o PublisherOptions) (_ *Pu
 			return nil, err
 		}
 	}
-	if _, err := p.validateHistory(ctx, info, state, b); err != nil {
+	if _, err := p.validateHistory(callerCtx, info, state, b); err != nil {
 		return nil, err
 	}
 	// Credentials are only needed by the owned NATS connection.
@@ -212,54 +213,8 @@ func checkNamespaceStream(info *jetstream.StreamInfo, state WriterState, b strea
 }
 
 func (p *Publisher) validateHistory(ctx context.Context, info *jetstream.StreamInfo, state WriterState, b streamBinding) (*jetstream.RawStreamMsg, error) {
-	if info.State.LastSeq < b.LogSequence {
-		return nil, ErrStreamIdentity
-	}
-	if state.PublishedSequence > 0 {
-		anchor, err := p.stream.GetMsg(ctx, b.LogSequence)
-		if err != nil {
-			return nil, p.connectionError(err)
-		}
-		c, err := p.decodeMessage(anchor)
-		if err != nil || c.Sequence != state.PublishedSequence || c.ID != b.ChangeID {
-			return nil, ErrStreamIdentity
-		}
-		// The verified checkpoint is also the tail in the normal case. Reuse
-		// this response within this inspection; never cache it across calls.
-		if info.State.LastSeq == b.LogSequence {
-			return anchor, nil
-		}
-	}
-	if info.State.LastSeq == 0 {
-		if state.PublishedSequence != 0 {
-			return nil, ErrStreamIdentity
-		}
-		return nil, nil
-	}
-	tail, err := p.stream.GetMsg(ctx, info.State.LastSeq)
-	if err != nil {
-		return nil, p.connectionError(err)
-	}
-	c, err := p.decodeMessage(tail)
-	if err != nil {
-		return nil, ErrStreamIdentity
-	}
-	if c.Sequence == state.PublishedSequence {
-		if c.ID != b.ChangeID {
-			return nil, ErrStreamIdentity
-		}
-	} else if c.Sequence == state.PublishedSequence+1 {
-		entry, found, err := p.w.NextOutbox()
-		if err != nil {
-			return nil, err
-		}
-		if !found || entry.Sequence != c.Sequence || entry.ID != c.ID || !bytes.Equal(entry.Payload, tail.Data) {
-			return nil, ErrStreamIdentity
-		}
-	} else {
-		return nil, ErrStreamIdentity
-	}
-	return tail, nil
+	h, err := p.inspectHistory(ctx, info, state, b, 0)
+	return h.Tail, err
 }
 
 func (p *Publisher) decodeMessage(m *jetstream.RawStreamMsg) (Change, error) {
@@ -285,6 +240,7 @@ func (p *Publisher) PublishNext(ctx context.Context) (bool, error) {
 	if !p.nc.AuthRequired() {
 		return false, ErrPublisherAuth
 	}
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, p.options.RequestTimeout)
 	defer cancel()
 	state, b, bound, err := p.w.publisherSnapshot()
@@ -304,9 +260,19 @@ func (p *Publisher) PublishNext(ctx context.Context) (bool, error) {
 	if err := p.checkStream(info, state, b, true); err != nil {
 		return false, err
 	}
-	if _, err := p.validateHistory(ctx, info, state, b); err != nil {
+	cancel()
+	history, err := p.inspectHistory(callerCtx, info, state, b, 1)
+	if err != nil {
 		return false, err
 	}
+	// A batch can have reached the server before its checkpoint was saved.
+	// Recover one verified entry without appending an older change after its tail.
+	if history.LastLogical > state.PublishedSequence+1 {
+		err := p.checkpointRecovered(callerCtx, info, b, history)
+		return err == nil, err
+	}
+	ctx, cancel = context.WithTimeout(callerCtx, p.options.RequestTimeout)
+	defer cancel()
 	entry, found, err := p.w.NextOutbox()
 	if err != nil || !found {
 		return false, err

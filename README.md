@@ -247,6 +247,23 @@ before retrying. The collection window limits time spent forming a batch, not
 end-to-end latency while queued or under overload. Batching shares the database's
 single writer; independent namespace databases provide additional write lanes.
 
+The Node publisher pipelines currently available outbox entries in ordered
+groups, bounded by the same operation and byte limits. It verifies all broker
+acknowledgements and retained bytes, then atomically removes that prefix and
+saves its logical/physical checkpoint in one local transaction. Publication
+adds no collection wait. At most eight messages are in flight by default: each
+window is acknowledged and its retained messages verified before the next window
+is sent. A checkpoint group may contain up to 500 operations or 1 MiB. Lower-level
+callers can use `PublishBatch`; `PublishNext`
+retains its one-entry interface. Request timeouts bound individual broker/ACK
+waits; the caller context bounds the whole publication batch.
+
+An uncertain batch outcome retains the complete uncheckpointed outbox and closes
+the publishing connection. Reconnect to verify the accepted stream suffix against
+the immutable outbox before sending more work, including after deduplication-window
+expiry. Replica application can precede the owner's saved publication checkpoint.
+Grouping publication does not make the group atomic across replicas.
+
 **Interrupted work has a durable recovery point.** Replicas acknowledge only
 after mutation and checkpoint commit. Invalid changes, gaps, incompatible
 versions, and missing pinned history block the namespace visibly. The system
@@ -336,12 +353,30 @@ To measure continuous ingestion with publication and both replicas online:
 sh scripts/podman-continuous-benchmark.sh
 ```
 
-This runner repeats eight-second offers at 20, 80 and 200 writes/second using
-1 KiB values, records progress during ingestion and subsequent backlog drain,
-and captures publisher broker-call timings and profiles. It uses the same
-durability settings and verifies every committed record on both replicas.
-[Continuous replication results](benchmarks/continuous.md) describe the workload,
-publisher change and measured limits.
+This runner compares single and batched publication over three repetitions of
+eight-second offers at 20, 80 and 200 writes/second with 1 KiB values. Mode order
+alternates across rounds. It records progress during ingestion and backlog drain,
+checkpoint counts, broker calls, enqueue-to-ACK latency, actual offered rate,
+scheduled-arrival-to-commit latency, memory and profiles, using identical durability
+settings and verifying every committed record on both replicas.
+[Publication batching results](benchmarks/publication-batching.md) compare the
+new path with the single-entry path and the earlier
+[continuous replication measurements](benchmarks/continuous.md).
+
+For two-minute offers at 200 writes/second with batched publication:
+
+```sh
+JLITE_BENCH_SECONDS=120 JLITE_BENCH_RATES=200 JLITE_BENCH_MODES=batch \
+  sh scripts/podman-continuous-benchmark.sh benchmarks/results/sustained-current.json
+```
+
+Two further experiments, [continuous window refill](benchmarks/continuous-pipeline.md)
+and [concurrent replica ACKs](benchmarks/replica-acks.md), did not improve
+sustained throughput and were not adopted. The
+[storage diagnostics](benchmarks/replication-diagnostics.md) show the tested
+volume completing about 213 fsyncs/second, which leaves little headroom for 200
+replicated writes/second in this setup. Short offers and eventual convergence
+alone do not establish sustained capacity.
 
 ## Project boundaries
 

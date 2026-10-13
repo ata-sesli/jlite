@@ -43,7 +43,7 @@ func connectNamespace(c Config, namespace string, o PublisherOptions) (*nats.Con
 		nc.Close()
 		return nil, nil, ErrPublisherAuth
 	}
-	js, err := jetstream.New(nc)
+	js, err := jetstream.New(nc, jetstream.WithPublishAsyncMaxPending(publicationWindow(c.Limits)))
 	if err != nil {
 		nc.Close()
 		return nil, nil, err

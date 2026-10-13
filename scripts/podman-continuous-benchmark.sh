@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-output=${1:-"$root/benchmarks/results/continuous.json"}
+output=${1:-"$root/benchmarks/results/publication-batches.json"}
 image=localhost/jlite:continuous-benchmark-tests
 name="jlite-continuous-$(date +%s)-$$"
 volume="$name-data"
@@ -20,14 +20,18 @@ podman volume create "$volume" >/dev/null
 podman create --name "$name" --network=none --cpus=4 --memory=2g --pids-limit=512 \
   --volume "$volume:/bench-data" --env TMPDIR=/bench-data --env GOMAXPROCS=4 \
   --env JLITE_CONTINUOUS_OUTPUT=/tmp/results.json --env "JLITE_BENCH_ROUNDS=${JLITE_BENCH_ROUNDS:-3}" \
+  --env "JLITE_BENCH_SECONDS=${JLITE_BENCH_SECONDS:-8}" --env "JLITE_BENCH_RATES=${JLITE_BENCH_RATES:-20,80,200}" \
+  --env "JLITE_BENCH_MODES=${JLITE_BENCH_MODES:-single,batch}" \
   --env "JLITE_BENCH_REVISION=$revision" \
   "$image" sh scripts/go.sh test -run '^TestContinuousBenchmark$' -count=1 -v -timeout=30m . >/dev/null
-echo "Measuring live owner publication and two online replicas at 20, 80 and 200 writes/s..."
+echo "Benchmarking ${JLITE_BENCH_MODES:-single,batch} publication at ${JLITE_BENCH_RATES:-20,80,200} writes/s for ${JLITE_BENCH_SECONDS:-8}s per sample..."
 if ! podman start --attach "$name"; then
   podman cp "$name:/tmp/results.json" "$output.partial" 2>/dev/null || true
   exit 1
 fi
 podman cp "$name:/tmp/results.json" "$output"
-podman cp "$name:/tmp/results.json.cpu" "$output.cpu"
-podman cp "$name:/tmp/results.json.block" "$output.block"
+for mode in $(printf '%s' "${JLITE_BENCH_MODES:-single,batch}" | tr ',' ' '); do
+  podman cp "$name:/tmp/results.json.$mode.cpu" "$output.$mode.cpu"
+  podman cp "$name:/tmp/results.json.$mode.block" "$output.$mode.block"
+done
 echo "Results: $output (with CPU and blocking profiles)"

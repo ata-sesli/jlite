@@ -296,7 +296,9 @@ func (n *Node) run(ctx context.Context) {
 				p, err = ConnectPublisher(ctx, n.writer, n.options.Replica.Connection)
 			}
 			if err == nil {
-				work, err = p.PublishNext(ctx)
+				var count int
+				count, err = p.PublishBatch(ctx)
+				work = count > 0
 			}
 		} else {
 			if c == nil {

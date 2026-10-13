@@ -18,7 +18,7 @@ COPY go.mod go.sum ./
 RUN test "$(go env GOVERSION)" = go1.27.1 && go mod download
 COPY . .
 RUN sh scripts/setup-zova.sh
-RUN sh scripts/go.sh test -race -count=1 -v -timeout=90s ./... && sh scripts/go.sh vet ./...
+RUN sh scripts/go.sh test -race -count=1 -v -timeout=3m ./... && sh scripts/go.sh vet ./...
 RUN sh scripts/go.sh build -o /out/jlite ./cmd/jlite
 
 FROM docker.io/library/debian:bookworm-slim
